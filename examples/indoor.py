@@ -32,8 +32,10 @@ except ImportError:
     raise ImportError('Please install open3d with `pip install open3d`.')
 
 import torch
+import torch.nn as nn
 import MinkowskiEngine as ME
 from examples.minkunet import MinkUNet34C
+from sklearn.decomposition import PCA
 
 # Check if the weights and file exist and download
 if not os.path.isfile('weights.pth'):
@@ -44,7 +46,7 @@ if not os.path.isfile("1.ply"):
     urlretrieve("https://bit.ly/3c2iLhg", "1.ply")
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--file_name', type=str, default='1.ply')
+parser.add_argument('--file_name', type=str, default='/home/tidy/plane_detection/OCID-dataset/ARID20/table/bottom/seq08/pcd/result_2018-08-21-14-50-04.pcd')
 parser.add_argument('--weights', type=str, default='weights.pth')
 parser.add_argument('--use_cpu', action='store_true')
 
@@ -102,6 +104,7 @@ SCANNET_COLOR_MAP = {
 
 def load_file(file_name):
     pcd = o3d.io.read_point_cloud(file_name)
+    pcd = pcd.remove_non_finite_points()
     coords = np.array(pcd.points)
     colors = np.array(pcd.colors)
     return coords, colors, pcd
@@ -120,18 +123,24 @@ def normalize_color(color: torch.Tensor, is_color_in_range_0_255: bool = False) 
     color -= 0.5
     return color.float()
 
+class Identity(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(x):
+        return x
 
 if __name__ == '__main__':
     config = parser.parse_args()
     device = torch.device('cuda' if (
         torch.cuda.is_available() and not config.use_cpu) else 'cpu')
     print(f"Using {device}")
+    pca = PCA(3)
     # Define a model and load the weights
     model = MinkUNet34C(3, 20).to(device)
     model_dict = torch.load(config.weights)
     model.load_state_dict(model_dict)
     model.eval()
-
+    
     coords, colors, pcd = load_file(config.file_name)
     # Measure time
     with torch.no_grad():
@@ -147,22 +156,26 @@ if __name__ == '__main__':
         # Convert to a sparse tensor
         sinput = in_field.sparse()
         # Output sparse tensor
-        soutput = model(sinput)
+        model(sinput)
+        soutput = model.without_final
+        
         # get the prediction on the input tensor field
         out_field = soutput.slice(in_field)
         logits = out_field.F
-
-    _, pred = logits.max(1)
-    pred = pred.cpu().numpy()
+    logits = logits.cpu().numpy()
+    colors = pca.fit_transform(logits)
+    colors = (colors - colors.min()) / (colors.max() - colors.min())
+    # _, pred = logits.max(1)
+    # pred = pred.cpu().numpy()
 
     # Create a point cloud file
     pred_pcd = o3d.geometry.PointCloud()
     # Map color
-    colors = np.array([SCANNET_COLOR_MAP[VALID_CLASS_IDS[l]] for l in pred])
+    # colors = np.array([SCANNET_COLOR_MAP[VALID_CLASS_IDS[l]] for l in pred])
     pred_pcd.points = o3d.utility.Vector3dVector(coords)
-    pred_pcd.colors = o3d.utility.Vector3dVector(colors / 255)
+    # pred_pcd.colors = o3d.utility.Vector3dVector(colors / 255)
+    pred_pcd.colors = o3d.utility.Vector3dVector(colors)
     pred_pcd.estimate_normals()
-
     # Move the original point cloud
     pcd.points = o3d.utility.Vector3dVector(
         np.array(pcd.points) + np.array([0, 5, 0]))

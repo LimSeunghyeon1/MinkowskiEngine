@@ -117,6 +117,16 @@ class MinkUNetBase(ResNetBase):
             kernel_size=1,
             bias=True,
             dimension=D)
+        
+        self.final_finetuned = ME.MinkowskiConvolution(
+            self.PLANES[7] * self.BLOCK.expansion,
+            1,
+            kernel_size=1,
+            bias=True,
+            dimension=D)
+
+        self.without_final = None
+        self.finetuned_feats = None
         self.relu = ME.MinkowskiReLU(inplace=True)
 
     def forward(self, x):
@@ -177,7 +187,11 @@ class MinkUNetBase(ResNetBase):
         out = ME.cat(out, out_p1)
         out = self.block8(out)
 
+        self.without_final = out
+        self.finetuned_feats = self.final_finetuned(out)
+
         return self.final(out)
+    
 
 
 class MinkUNet14(MinkUNetBase):
